@@ -1,0 +1,1277 @@
+---
+title: "aDNA damage patterns in Weyrich Study"
+author: "Jacqueline Rehn"
+date: "5/22/2017"
+output: html_document
+---
+
+#Introduction
+
+aDNA is typically damaged. As a result, reads produced when sequencing DNA extracted from archeological specimens have short read lengths (<100bp) and contain substitution mutations as a result of nucleotide misincorporation occuring due to the presence of deaminated bases. This damage both impedes the alignment and taxonomic classification of species in ancient metagenomic samples and can provide a mechanism for authenticating the ancient origin of sequences. 
+
+Tools such as mapDamage2 can be used to assess the fragmentation and misincorporation patterns of aDNA samples, but have been produced specifically for the analysis of mammalian samples. To see if similar fragmentation patterns are observed in microbial sequences produced through extraction and amplification of DNA present in dental calculus, processed metagenomic data from Elsidron1 and a Modern counterpart were aligned to 10 microbial genomes and reads identified as belonging to each of these species were analysed with mapDamage2. The resultant fragmentation and nucleotide misincorporation data was plotted to enable comparision in damage patterns between microbial sequences within each sample as well as between samples, to confirm that each of the microbial DNA assessed demonstrate similar damage as observed in mammalian aDNA sequences.
+
+##Initial Data
+
+Data used for this analysis was part of a shotgun metagenomic study conducted by Weyrich et al., (2017) comparing microbial composition of dental calculus taken from five Neanderthals with samples extracted from a modern human, wild chimp and low coverage sequencing of several ancient specimens. Sequencing data had been pre-processed, including merging of paired-end reads and removal of adapters. Samples selected were the Elsidron1 Neanderthal sample, as it contained the highest coverage, and the modern sample, in order to identify differences in damage patterns as a result of ancient DNA decay.
+
+##Data processing required
+
+Shotgun metagenomic samples consist of DNA sequences from multiple microbial species present in the origninal specimen. After sequencing, this produces a fastq file that contains a complex mixture of reads representing many different microbial species. In order to analyse and compare the damage patterns characteristic of different bacterial species the fastq data must be processed as follows:
+
+1. Download fasta files of Ref seq genomes to which the reads may align and concatenate this information into a single fasta file.
+2. Align pre-processed reads to an index built from the concatenated fasta file (bwa). Using a concatenated file prevents the same read from aligning to multiple genomes. 
+3. Sort and remove duplicate reads from the bam file (sambamba).
+4. Split the *_rmdup.bam file into separate bam files for each genome the reads were aligned with (samtools).
+6. Analyse the damage patterns in the *_split.bam files (mapDamage2.0).
+
+###Choice of bacterial genomes
+Bacterial genomes chosen for alignment were based on several criteria:
+
+1. Genus was identified as being present in the sample data in a relatively high proportion
+2. Selected species are known to be present in the oral microbiome
+3. Reference sequence genome was available
+4. Combination of gram positive and gram negative bacteria included as well as an archeal and mycobacterium
+
+Using this criteria 10 genomes were selected:
+
+|Species|RefSeqID|Phylum|Gram stain|Prevalence|
+|:------|:-------|:-----|:---------|:------------------------|
+|Actinomyces oris|NZ_CP014232|Actinobacteria|Gram +|Part of the normal oral microflora, role in dental plaque formation|
+|Campylobacter gracilis|NZ_CP012196.1|Proteobacteria|Gram -|Common in subgingival plaque|
+|Eubacterium sphenum|NZ_ACON00000000.1|Firmicutes|Gram +|Isolated from periodontal pockets|
+|Fusobacterium nucleatum|NC_003454.1|Fusobacteria|Gram -|Dominant bacterial species in oral cavity|
+|Mycobacterium neoaurum|NC_023036.2|Actinobacteria|Mycobacterium|Common in environment, rare cause of human infection|
+|Methanobrevibacter oralis|NZ_LWMU00000000.1|Archea|Gram +|Associated with some cases of periodontal disease|
+|Porphyromonas gingivalis|NC_010729.1|Bacteroidetes|Gram -|Associated with severe and chronic periodontal disease|
+|Streptococcus mutans|NC_004350.1|Firmicutes|Gram +|Common in supragingival plaque|
+|Treponema denticola|NC_002967.9|Spirochaetes|Gram -|Frequently present in subgingival plaque|
+|Tannerella forsythia|NC_016610.1|Bacteriodetes|Gram -|Key agent in periodontal disease|
+
+##Bas script for data processing
+
+```{bash eval=FALSE}
+#!/bin/bash
+
+#USAGE: Requires trimmed_fastq files in specified directory
+#       Specify variable for location of Ref Seq genomes for downloading and alignment
+
+
+#Specify variables
+ROOTDIR=/home/a1698312
+TRIMDIR=$ROOTDIR/weyrich/trimData
+ALNDIR=$ROOTDIR/weyrich/alnData
+QUALALNDIR=$ROOTDIR/weyrich/highQualAlnData
+
+#Specify Ref Seq genomes and download locations
+REF1=aoris
+REF1LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/553/935/GCF_001553935.1_ASM155393v1/GCF_001553935.1_ASM155393v1_genomic.fna.gz
+REF2=pgingivalis
+REF2LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/010/505/GCF_000010505.1_ASM1050v1/GCF_000010505.1_ASM1050v1_genomic.fna.gz
+REF3=smutans
+REF3LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/007/465/GCF_000007465.2_ASM746v2/GCF_000007465.2_ASM746v2_genomic.fna.gz
+REF4=tforsythia
+REF4LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/238/215/GCF_000238215.1_ASM23821v1/GCF_000238215.1_ASM23821v1_genomic.fna.gz
+REF5=fnucleatum
+REF5LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/007/325/GCF_000007325.1_ASM732v1/GCF_000007325.1_ASM732v1_genomic.fna.gz
+REF6=cgracilis
+REF6LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/190/745/GCF_001190745.1_ASM119074v1/GCF_001190745.1_ASM119074v1_genomic.fna.gz
+REF7=tdenticola
+REF7LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/008/185/GCF_000008185.1_ASM818v1/GCF_000008185.1_ASM818v1_genomic.fna.gz
+REF8=moralis
+REF8LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/639/275/GCF_001639275.1_ASM163927v1/GCF_001639275.1_ASM163927v1_genomic.fna.gz
+REF9=mneoaurum
+REF9LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/317/305/GCF_000317305.3_ASM31730v3/GCF_000317305.3_ASM31730v3_genomic.fna.gz
+REF10=esaphenum
+REF10LOCAL=ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/161/975/GCF_000161975.1_ASM16197v1/GCF_000161975.1_ASM16197v1_genomic.fna.gz
+
+
+##### bwa_build alignment index ####
+
+Create alnData directory
+if [ ! -d ${ALNDIR} ]
+then
+  echo "Creating alnData directory"
+  mkdir -p alnData
+  echo "Changing into ${ALNDIR}"
+  cd ${ALNDIR}
+else
+  echo "${ALIGNDIR} already exists. Changing into ${ALNDIR}"
+  cd ${ALNDIR}
+fi
+
+#Download fasta files
+echo "Downloading ${REF1} fasta file"
+wget $REF1LOCAL -O ${REF1}.fna.gz
+echo "Downloading ${REF2} fasta file"
+wget $REF2LOCAL -O ${REF2}.fna.gz
+echo "Downloading ${REF3} fasta file"
+wget $REF3LOCAL -O ${REF3}.fna.gz
+echo "Downloading ${REF4} fasta file"
+wget $REF4LOCAL -O ${REF4}.fna.gz
+echo "Downloading ${REF5} fasta file"
+wget $REF5LOCAL -O ${REF5}.fna.gz
+echo "Downloading ${REF6} fasta file"
+wget $REF6LOCAL -O ${REF6}.fna.gz
+echo "Downloading ${REF7} fasta file"
+wget $REF7LOCAL -O ${REF7}.fna.gz
+echo "Downloading ${REF8} fasta file"
+wget $REF8LOCAL -O ${REF8}.fna.gz
+echo "Downloading ${REF9} fasta file"
+wget $REF9LOCAL -O ${REF9}.fna.gz
+echo "Downloading ${REF10} fasta file"
+wget $REF10LOCAL -O ${REF10}.fna.gz
+
+
+## Jimmy suggestions
+# while read line; do link=$(echo $line | cut -f2); wget -c "$link"; done < file_from_bash.txt
+
+#unzip fasta files
+gunzip *fna.gz
+
+#concatenate fasta files
+cat *fna > combined.fna
+
+#build-index for alignment
+bwa index -p bwaidx combined.fna
+
+##### bbmerge_mergePEreads #####
+
+#Create directory for merged data
+#cd $ROOTDIR/ziesemer
+
+#if [ ! -d ${MERGEDIR} ]
+#then
+#  echo "Creating mergedData directory"
+#  mkdir -p mergedData
+#else
+#  echo "${MERGEDIR} already exists"
+#fi
+
+#Change into directory where trimmed fastq files located
+#if [ -d ${TRIMDIR} ]
+#then
+#  echo "Changing to trimmedData directory"
+#  cd ${TRIMDIR}
+#else
+#  echo "Cannot find ${TRIMDIR}"
+#exit1
+#fi
+
+#Merge PE reads
+
+#for fastq in *_1.fastq.gz
+#  do
+#    echo "Merging ${fastq}"
+#    PREFIX=${fastq%%_1.fastq.gz}
+#    bbmerge.sh in=${PREFIX}_1.fastq.gz in2=${PREFIX}_2.fastq.gz \
+#    out=$MERGEDIR/${PREFIX}_MERGED.fastq.gz outu=$MERGEDIR/${PREFIX}_UNMERGED.fastq.gz \
+#    ihist=$MERGEDIR/${PREFIX}_ihist.txt 2> $MERGEDIR/${PREFIX}_mergedLog.txt
+#  done
+
+##### BWA Alignment #####
+
+#Change into directory where trimmed_fastq files located
+if [ -d ${TRIMDIR} ]
+then
+  echo "Changing to trimData directory"
+  cd ${TRIMDIR}
+else
+  echo "Cannot find ${TRIMDIR}"
+exit1
+fi
+
+#bwa alignment of collapsed reads
+for collapsed_file in *_Collapsed.fastq.gz
+do
+  echo "Aligning ${collapsed_file}"
+  bwa aln -n 0.01 -o 2 -l 1024 -t 4 $ALNDIR/bwaidx $collapsed_file > ${collapsed_file/%_R1R2_Collapsed.fastq.gz/_MAPPED.sai}
+done
+
+#Convert .sai alignment file to bam format with the sam header. Exclude unmapped reads.
+for aln_file in *_MAPPED.sai
+  do
+    echo "Converting ${aln_file} to bam format"
+    PREFIX=${aln_file%%_MAPPED.sai}
+    bwa samse $ALNDIR/bwaidx \
+              ${PREFIX}_MAPPED.sai \
+              ${PREFIX}_R1R2_Collapsed.fastq.gz | \
+                samtools view -bSh -F0x4 -> $ALNDIR/${PREFIX}_bwa.bam
+  done
+
+#Remove .sai files as no longer needed
+rm *_MAPPED.sai
+
+################### sambamba sort and rmdup #####################
+
+#Change into directory where .bam files located
+if [ -d ${ALNDIR} ]
+then
+  echo "Changing to ${ALNDIR}"
+  cd ${ALNDIR}
+else
+  echo "Cannot find ${ALNDIR}"
+exit1
+fi
+
+for bam_file in *_bwa.bam
+do
+  PREFIX2=${bam_file%%_bwa.bam}
+  echo "Sorting bam file for ${bam_file}"
+  sambamba sort -o ${PREFIX2}_sorted.bam ${bam_file}
+done
+
+for sort_file in *_sorted.bam
+do
+  PREFIX3=${sort_file%%_sorted.bam}
+  echo "Removing duplicates ${sort_file}"
+  sambamba markdup -r ${sort_file} ${PREFIX3}_rmdup.bam 2> ${PREFIX3}_sambambaLog.txt
+done
+
+#Remove _sorted.bam.bai files as no longer needed
+rm *_sorted.bam.bai
+#Remove _sorted.bam files as no longer needed
+rm *_sorted.bam
+
+################# split bam file ####################
+
+#use samtools view & chromosome ID to split into separate bam files
+for rmdup_file in *_rmdup.bam
+  do
+    PREFIX4=${rmdup_file%%L7_*}
+    echo "Splitting ${rmdup_file} for ${REF1}"
+    samtools view -q 30 -bSh ${rmdup_file} NZ_CP014232.1 > ${QUALALNDIR}/${PREFIX4}_${REF1}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF2}"
+    samtools view -q 30 -bSh ${rmdup_file} NC_010729.1 > ${QUALALNDIR}/${PREFIX4}_${REF2}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF3}"
+    samtools view -q 30 -bSh ${rmdup_file} NC_004350.2 > ${QUALALNDIR}/${PREFIX4}_${REF3}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF4}"
+    samtools view -q 30 -bSh ${rmdup_file} NC_016610.1 > ${QUALALNDIR}/${PREFIX4}_${REF4}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF5}"
+    samtools view -q 30 -bSh ${rmdup_file} NC_003454.1 > ${QUALALNDIR}/${PREFIX4}_${REF5}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF6}"
+    samtools view -q 30 -bSh ${rmdup_file} NZ_CP012196.1 > ${QUALALNDIR}/${PREFIX4}_${REF6}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF7}"
+    samtools view -q 30 -bSh ${rmdup_file} NC_002967.9 > ${QUALALNDIR}/${PREFIX4}_${REF7}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF9}"
+    samtools view -q 30 -bSh ${rmdup_file} NC_023036.2 > ${QUALALNDIR}/${PREFIX4}_${REF9}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF10}"
+    samtools view -q 30 -bSh ${rmdup_file} NZ_GG688422.1 > ${QUALALNDIR}/${PREFIX4}_${REF10}_Q30_split.bam
+    echo "Splitting ${rmdup_file} for ${REF8}"
+    samtools view -q 30 -h ${rmdup_file} | awk '{if($3 != "NZ_CP014232.1" && $3 != "NC_010729.1" && $3 != "NC_004350.2" && $3 != "NC_016610.1" && $3 != "NZ_CP012196.1" && $3 != "NC_003454.1" && $3 != "NC_002967.9" && $3 != "NC_023036.2" && $3 != "NZ_GG688422.1"){print $0}}' | samtools view -Sb > ${QUALALNDIR}/${PREFIX4}_${REF8}_Q30_split.bam
+  done
+
+################# mapDamage #########################
+
+#Change into directory where Q30_split.bam files located
+if [ -d ${QUALALNDIR} ]
+then
+  echo "Changing to ${QUALALNDIR}"
+  cd ${QUALALNDIR}
+else
+  echo "Cannot find ${QUALALNDIR}"
+exit1
+fi
+
+for split_file in *Q30_split.bam
+  do
+    echo "Running mapDamage on ${split_file}"
+    mapDamage -i ${split_file} -r $ALNDIR/combined.fna
+  done
+```
+
+###Count Data
+
+The following count data was also obtained:
+1. The number of pre-processed reads available for alignment (count fastq files)
+2. The total number of reads which aligned to the concatenated fasta file (count .bam files)
+3. The number of reads remaining after duplicate removal (count _rmdup.bam files)
+4. The number of reads aligning at different quality score cut-off's (count rmdup.bam file using samtools view -q filter)
+5. The number of reads aligning to each genome (count _split.bam files)
+
+These counts were completed and saved to text files using the following bash script:
+
+```{bash eval=FALSE}
+#!/bin/bash
+
+#count merged_fastq and _rmdup.bam and _split.bam files
+
+#Specify variables
+ROOTDIR=/home/a1698312
+TRIMDIR=$ROOTDIR/weyrich/trimData
+ALNDIR=$ROOTDIR/weyrich/alnData
+QUALALNDIR=$ROOTDIR/weyrich/highQualAlnData
+
+########### Count merged Reads ###############
+
+#Change into directory where Collapsed_fastq files located
+if [ -d ${TRIMDIR} ]
+then
+  echo "Changing to trimData directory"
+  cd ${TRIMDIR}
+else
+  echo "Cannot find ${TRIMDIR}"
+exit1
+fi
+
+#Generate text file for storing merged count data
+if [ ! -f collapsed_read_count.txt ]
+then
+  echo -e 'Creating file collapsed_read_count.txt'
+  echo -e 'fileName\t#collapsedReads' > collapsed_read_count.txt
+else
+  echo  'collapsed count file already exists'
+fi
+
+#Count merged reads in fastq files and print to text file
+for Collapsed_fastq in *_Collapsed.fastq.gz
+  do
+    echo "Counting number of merged reads in ${Collapsed_fastq}"
+    MERGECOUNT=$(zcat ${Collapsed_fastq} | egrep -c '^@M_HWI')
+    echo -e "${Collapsed_fastq%%.fastq.gz}\t${MERGECOUNT}" >> collapsed_read_count.txt
+  done
+
+########## Count aligned reads ############
+
+#Change into directory where aln_files located
+if [ -d ${ALNDIR} ]
+then
+  echo "Changing to alnData directory"
+  cd ${ALNDIR}
+else
+  echo "Cannot find ${ALNDIR}"
+exit1
+fi
+
+#Generate text file for storing alignment count data
+if [ ! -f aligned_read_count.txt ]
+then
+  echo -e 'Creating file aligned_read_count.txt'
+  echo -e "fileName\t#alnReads\t#alnReadsQ>10\t#alnReadsQ>20\t#alnReadsQ>30" > aligned_read_count.txt
+else
+  echo  'Alignment count file already exists'
+fi
+
+#Count total number of reads aligned at different quality scores
+for bam_file in *.bam
+  do
+    echo "Counting reads in ${bam_file}"
+    ALNCOUNT=$(samtools view -c ${bam_file})
+    ALNCOUNTQ10=$(samtools view -q 10 -c ${bam_file})
+    ALNCOUNTQ20=$(samtools view -q 20 -c ${bam_file})
+    ALNCOUNTQ30=$(samtools view -q 30 -c ${bam_file})
+    echo -e "${bam_file%%.bam}\t${ALNCOUNT}\t${ALNCOUNTQ10}\t${ALNCOUNTQ20}\t${ALNCOUNTQ30}" >> aligned_read_count.txt
+  done
+
+##############Count aligned reads in split.bam files################
+
+#Generate text file for storing split alignment count data
+if [ ! -f split_aligned_read_count.txt ]
+then
+  echo -e 'Creating file split_aligned_read_count.txt'
+  echo -e "fileName\t#alnReads" > split_aligned_read_count.txt
+else
+  echo  'split_aligned_read_count.txt already exists'
+fi
+
+#Count total number of reads aligned in each split file with no quality filtering
+for split_file in *split.bam
+  do
+    echo "Counting reads in ${split_file}"
+    SPLITCOUNT=$(samtools view -c ${split_file})
+    echo -e "${split_file%%_split.bam}\t${SPLITCOUNT}" >> split_aligned_read_count.txt
+  done
+
+#Change into directory where highQualAln_files located
+if [ -d ${QUALALNDIR} ]
+then
+  echo "Changing to highQualAlnData directory"
+  cd ${QUALALNDIR}
+else
+  echo "Cannot find ${QUALALNDIR}"
+exit1
+fi
+
+#Generate text file for storing split alignment count data
+if [ ! -f highQual_split_aligned_read_count.txt ]
+then
+  echo -e 'Creating file highQual_split_aligned_read_count.txt'
+  echo -e "fileName\t#alnReads" > highQual_split_aligned_read_count.txt
+else
+  echo  'highQual_split_aligned_read_count.txt already exists'
+fi
+
+#Count total number of reads aligned in each split file with -q 30 filter
+for Q30split_file in *Q30_split.bam
+  do
+    echo "Counting reads in ${Q30split_file}"
+    Q30SPLITCOUNT=$(samtools view -c ${Q30split_file})
+    echo -e "${Q30split_file%%_Q30_split.bam}\t${Q30SPLITCOUNT}" >> highQual_split_aligned_read_count.txt
+  done
+```
+
+
+#Results
+
+Count data was assess to determine if the modern and ancient samples showed differences in the proportion of aligned reads, quality of the alignment data and observe non-normalized differences in microbial composition. Count data is displayed in table.
+
+```{r message=FALSE}
+#load packages
+library(dplyr)
+library(readr)
+library(magrittr)
+library(tibble)
+library(stringr)
+library(reshape2)
+library(ggplot2)
+library(data.table)
+library(scales)
+
+#Read in txt file with fastq count data and assign to object
+fastqCount <- read_delim("trimData/collapsed_read_count.txt", delim = "\t", 
+           skip = 1, col_names = FALSE) %>%
+  set_colnames(c("fileName", "mergedReads"))
+
+#Edit file name
+#fastqCount$sampleID <- gsub('2NoAdapt_', '', fastqCount$sampleID)
+#fastqCount$sampleID <- gsub('_R1R2_Collapsed', '', fastqCount$sampleID)
+#fastqCount$sampleID <- gsub('L7_lTACTG_rCTCGA', '', fastqCount$sampleID)
+#fastqCount$sampleID <- gsub('L7_lAAGAG_rNONE', '', fastqCount$sampleID)
+#fastqCount$sampleID <- gsub('ELSIDRON1', 'Elsidron1', fastqCount$sampleID)
+
+#Split fileName information into separate variables
+colsplit(fastqCount$fileName, "_", names=c("adapters", "sampleID", "leftBC", "rightBC", "read")) %>% 
+  bind_cols(fastqCount) %>% select(-fileName) -> fastqCount
+#remove irrelevant columns
+fastqCount <- fastqCount[, c(2,6)]
+
+#Read in text file with alingment count data and assign to object
+alnCount <- read_delim("alnData/aligned_read_count.txt", delim = "\t", skip = 1, 
+                       col_names = FALSE) %>% 
+  set_colnames(c("fileName", "alnReads", "alnQ10", "alnQ20", "alnQ30"))
+
+#Create function to edit fileName to include only sampleID and Genome
+editFileName <- function(x){
+  x$fileName <- gsub('2NoAdapt_', '', x$fileName)
+  x$fileName <- gsub('L7_lTACTG_rCTCGA', '', x$fileName)
+  x$fileName <- gsub('L7_lAAGAG_rNONE', '', x$fileName)
+  x$fileName <- gsub('_split', '', x$fileName)
+  x$fileName <- gsub('ELSIDRON1', 'Elsidron1', x$fileName)
+  x$fileName <- gsub('L7', '', x$fileName)
+}
+#Edit fileNames
+alnCount$fileName <- editFileName(alnCount)
+
+#Create function to reshape data to separate sampleID and genome aligning with from fileName information
+splitFileName <- function(x){
+  x %>% mutate(genome = str_extract(fileName,  "(aoris|bwa|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|rmdup|smutans|tdenticola|tforsythia|moralis)"), sampleID = str_replace(fileName, "_(aoris|bwa|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|rmdup|smutans|tdenticola|tforsythia|moralis)", ""))
+}
+#Apply splitFileName function to alnCount
+alnCount <- splitFileName(alnCount)
+#Re-order columns, removing fileName
+alnCount <- alnCount[, c(7,6,2:5)]
+#Re-arrange order of variables so that alphabetical
+alnCount <- alnCount[with(alnCount, order(sampleID)), ]
+  
+#extract information about the total number of reads aligned
+bwaCount <- alnCount %>% filter(genome == "bwa") %>% select(-genome, -alnQ10, -alnQ20, -alnQ30)
+#extract information about the total number of reads aligning after rmdup
+rmdupCount <- alnCount %>% filter(genome == "rmdup") %>% select(-genome)
+#Combine fastqCount, bwaCount and rmdupCount into one data frame
+totalCount <- fastqCount %>% left_join(bwaCount) %>% left_join(rmdupCount, by = "sampleID")
+#Edit column headings
+totalCountHeadings <- c("sampleID", "totalMerged", "totalAln", "totalAlnRmdup", 
+                        "alnRmdupQ10", "alnRmdupQ20", "alnRmdupQ30")
+names(totalCount) <- totalCountHeadings
+#Calculate proportion of reads aligned + proportion of duplicates removed and add to table
+totalCount <- totalCount %>% mutate(propAln = (totalAln/totalMerged)*100) %>% 
+  mutate(propDupRm = ((totalAln-totalAlnRmdup)/totalAln)*100)
+totalCount <- totalCount[,c(1:3,8,9,4:7)]
+#Calculate proprotion of aligned reads at different quality scores and add to table
+totalCount <- totalCount %>% mutate(propQ10 = (alnRmdupQ10/totalAlnRmdup)*100) %>% 
+  mutate(propQ20 = (alnRmdupQ20/totalAlnRmdup)*100) %>% 
+  mutate(propQ30 = (alnRmdupQ30/totalAlnRmdup)*100)
+totalCount <- totalCount[, c(1:7,10,8,11,9,12)]
+countTable <- totalCount[, c(1:6)]
+countTableHeadings <- c("Sample ID", "No. reads merged", "No. reads aligned", "% reads aligned",
+                       "% duplicates removed", "No. reads aligned after duplicates removed")
+names(countTable) <- countTableHeadings
+alnQualTable <- totalCount[,c(1,7:12)]
+alnQualTableHeadings <- c("Sample ID", "No. reads Q>10", "% Q>10", "No. reads Q>20", "% Q>20", "No. reads Q>30", "% Q>30")
+names(alnQualTable) <- alnQualTableHeadings
+```
+
+
+```{r echo = FALSE, results = 'asis'}
+library(knitr)
+kable(countTable, caption = "Count data for each sample")
+kable(alnQualTable, caption = "Proportion of reads aligning at different alignment quality cut-off's")
+```
+
+
+```{r message = FALSE}
+#Plot totalCount data as bar plot for comparison
+countPlot1 <- totalCount %>% 
+  select(sampleID, totalMerged, totalAln) %>% 
+  melt(id.vars = c("sampleID"), variable.name = "counting", value.name = "count") %>% 
+  ggplot(aes(x="", y=count, fill=counting)) + 
+    geom_bar(width = 1, stat = "identity") + 
+    scale_y_continuous(labels = scales::comma) + 
+    theme_bw() +
+    xlab("sample") + 
+    ylab("Number of Reads") + 
+    guides(fill=guide_legend(title=NULL)) +
+    theme(axis.title.x=element_blank(), legend.position = "none") +
+    scale_fill_discrete(limits=c("totalAln", "totalMerged"), labels=c("Aligned", "Not aligned")) + 
+    facet_wrap(~sampleID)
+
+#Create a blank theme to be applied to pie charts
+blank_theme <- theme_minimal()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_blank(),
+    panel.grid=element_blank(),
+    axis.ticks = element_blank(),
+    plot.title=element_text(size=14, face="bold")
+  )
+
+#Proportion of reads aligned for each sample, plotted as a piechart
+countPlot2 <- totalCount %>% select(sampleID, totalMerged, totalAln, propAln, propDupRm) %>% 
+  mutate(propUnAln = ((totalMerged-totalAln)/totalMerged)*100) %>% 
+  select(sampleID, propAln, propUnAln) %>% melt(id.vars = "sampleID") %>% 
+  ggplot(aes(x="", y=value, fill=variable)) + geom_bar(stat = "identity") + 
+  coord_polar("y", start=0) + blank_theme + scale_fill_discrete(labels=c("Aligned", "Not aligned")) +
+  guides(fill=guide_legend(title=NULL)) + theme(axis.text.x=element_blank()) + 
+  facet_wrap(~sampleID, ncol=1)
+
+library(gridExtra)
+grid.arrange(countPlot1, countPlot2, ncol=2, widths=c(1,0.8), top="Proportion of Total Reads Aligned")
+print(countPlot1)
+print(countPlot2)
+
+```
+
+By plotting the number of merged and aligned reads we can see that there is much higher sequencing coverage for the Elsidron sample, resulting in a greater number of reads. However, in both cases only a very small proportion (~2.5%) of reads are aligning to one of the 10 genomes used in this analysis.
+
+```{r message = FALSE}
+#Calculate proportion of duplicates removed and assign to data frame
+dupCount <- totalCount %>% select(sampleID, totalMerged, totalAln, propAln, totalAlnRmdup, propDupRm) %>% 
+  mutate(propUnAln = ((totalMerged-totalAln)/totalMerged)*100) %>% 
+  mutate(propNotDup = 100-propDupRm) %>% select(sampleID, propDupRm, propNotDup) %>% 
+  melt(id.vars = c("sampleID"))
+#convert value variable to as.numeric
+dupCount$value <- as.numeric(dupCount$value)
+#round calculated values to 2 decimal places
+dupCount[,3] <-round(dupCount[,3],2)
+#Plot the proportion of duplicates removed from each sample
+countPlot3 <- dupCount %>% ggplot(aes(x="", y=value, fill=variable)) + 
+  geom_bar(stat = "identity") + coord_polar("y", start=0) + blank_theme + 
+  geom_text(aes(label = value), position = position_stack(vjust = 0.5)) + facet_wrap(~sampleID) +
+  theme(axis.text.x=element_blank()) + scale_fill_discrete(labels=c("% Duplicates removed", "% Reads remaining")) +
+  guides(fill=guide_legend(title=NULL)) +
+  ggtitle("Proportion of aligned reads identified as duplicate")
+
+print(countPlot3)
+```
+
+Comparing the proportion of duplicates removed from each of the samples we see that far more (57.6%) are removed from the ancient sample compared to the modern (15.5%). Consequently, once duplicates are removed there are 35,000 more aligned reads remaining in the modern sample, desplite the higher sequencing coverage completed for Elsidron1.
+
+```{r message = FALSE}
+#Pie chart indicating the proportion of reads above specified quality scores
+countPlot4 <- totalCount %>% select(-totalMerged, -totalAln, -propAln, -totalAlnRmdup, 
+                                    -propDupRm, -alnRmdupQ10, -alnRmdupQ20, -alnRmdupQ30) %>% 
+  mutate(propGT20 = propQ20-propQ30) %>% mutate(propGT10 = propQ10-(propQ30+propGT20)) %>% 
+  mutate(propGT0 = 100-(propQ30+propGT20+propGT10)) %>% select(-propQ10, -propQ20) %>% 
+  melt(id.vars = c("sampleID")) %>% ggplot(aes(x="", y=value, fill = variable)) + 
+  geom_bar(stat = "identity") + coord_polar("y", start=0) + blank_theme + 
+  theme(axis.text.x = element_blank()) + facet_wrap(~sampleID) +
+  scale_fill_discrete(name="Alignment MAPQ score" ,labels=c("MAPQ > 30", "MAPQ 20 - 30", "MAPQ 10 - 20", "MAPQ < 10")) +
+  ggtitle("Proportion of aligned reads with specified MAPQ scores")
+
+print(countPlot4)
+```
+
+When comparing the proportion of reads at different alignment quality score cut-offs we see that the Modern sample contains a greater proportion of reads with a quality score above 30. There is little difference in the number of reads which have quality above 10 and above 20.
+
+###Number and proportion of reads aligning to each genome in each sample.
+By plotting the number of reads aligning to each genome at different quality score cut-off's, we can see both the effect of quality filtering on sample size for each genome and differences in the proportion of microbes present in each sample.
+
+```{r message=FALSE}
+#Remove bwa data from alnCount data frame
+alnCount <- alnCount %>% filter(genome != "bwa")
+
+#Calculate proportion of reads aligning to each genome using totalAlnRmdup
+##ELSIDRON1 totalAlnRmdup = 547,017
+##Modern totalAlnRmdup = 582,311
+alnCount <- rmdupCount %>% select(-alnQ10, -alnQ20, -alnQ30) %>% left_join(alnCount, by = "sampleID")
+#edit heading names
+alnCountHeadings <- c("sampleID", "alnReads", "genome", "mapQ0", "mapQ10", "mapQ20", "mapQ30")
+names(alnCount) <- alnCountHeadings
+#Convert rmdup to all (as represents total number of reads aligning)
+alnCount$genome <- gsub('rmdup', 'all', alnCount$genome)
+#sort columns so that genomes listed in alphabetical order
+alnCount <- alnCount[with(alnCount, order(sampleID, genome)), ]
+#Edit genome names to increase readability
+editGenomeNames <- function(x){
+  x$genome <- gsub('aoris', 'A.oris', x$genome)
+  x$genome <- gsub('cgracilis', 'C.gracilis', x$genome)
+  x$genome <- gsub('esaphenum', 'E.saphenum', x$genome)
+  x$genome <- gsub('fnucleatum', 'F.nucleatum', x$genome)
+  x$genome <- gsub('mneoaurum', 'M.neoaurum', x$genome)
+  x$genome <- gsub('pgingivalis', 'P.gingivalis', x$genome)
+  x$genome <- gsub('smutans', 'S.mutans', x$genome)
+  x$genome <- gsub('tdenticola', 'T.denticola', x$genome)
+  x$genome <- gsub('tforsythia', 'T.forsythia', x$genome)
+  x$genome <- gsub('moralis', 'M.oralis', x$genome)
+}
+#Apply above function to data frame
+alnCount$genome <- editGenomeNames(alnCount)
+
+#Convert alnCount from wide to long format 
+alnCountLong <- alnCount %>% select(-alnReads) %>% 
+  melt(id.vars = c("sampleID", "genome"), variable.name = "mapQ", value.name = "count")
+#substitute alnQ0 for a value
+alnCountLong$mapQ <- gsub('mapQ', '', alnCountLong$mapQ)
+#Convert qual.cutoff from chr to as.numeric
+alnCountLong$mapQ <- as.numeric(alnCountLong$mapQ)
+
+####Plot Number of reads aligning to each genome at different MAPQ scores###
+alnCountLong %>% ggplot(aes(x=mapQ, y=count, group=genome, colour=genome)) + geom_line() +
+  theme_bw() + xlab("Aligment quality score cutoff") +
+  scale_y_continuous(labels = scales::comma) +
+  ylab("Number of reads") + scale_colour_discrete(name="Genome") +
+  scale_color_discrete(drop = TRUE, limits = levels(alnCountLong$genome)) +
+  facet_wrap(~sampleID) + ggtitle("Number of readsa aligning at various MAPQ scores")
+
+```
+
+In both samples, there is a decline in sample size as the quality score value is increased, however this is more pronounced for the Elsidron1 sample, which contained a higher proportion of low quality alignments. This is expected given that DNA extracted from Elsidron1 sample is much greater in age and thus expected to demonstrate more damage that impedes alignment.
+
+We can also see that the relative abundance of each microbe varies between samples, although this is more easily observed using a stacked bar graph. 
+
+```{r message = FALSE}
+#Plot stacked bar plot indicating number of reads aligning to each genome
+alnCountLong %>% filter(genome != "all") %>% ggplot(aes(x=mapQ, y=count, fill=genome)) + 
+  geom_bar(stat = "identity") + scale_y_continuous(labels = scales::comma) + theme_bw() +
+  ylab("Number of reads") + xlab("MAPQ score cut-off") + ggtitle("Relative abundance of microbes") +
+  facet_wrap(~sampleID) + scale_fill_discrete(name="Genome")
+
+```
+
+
+There is a much higher proportion of _F nucleatum_ and _T forsythia_ in the Modern sample compared to the ancient which contains a greater abundance of _A oris_ and _M oralis_.
+
+```{r message=FALSE}
+##Re-calculate proportions for MAPQ>30 so that total is 100%
+#Extract total number of reads aligning with MAPQ>30 and assign too tibble
+totalMAPQ30 <- alnCount %>% filter(genome == "all") %>% select(sampleID, mapQ30)
+#Join this information to alnCount to generate a new data frame
+alnQ30 <- alnCount %>% filter(genome != "bwa") %>% select(-alnReads, -mapQ0, -mapQ10, -mapQ20) %>% 
+  left_join(totalMAPQ30, by = "sampleID")
+#Edit column headings
+names(alnQ30) <- c("sampleID", "genome", "mapQ30", "totalMAPQ30")
+#Calculate proportions
+alnQ30 <- alnQ30 %>% mutate(mapQ30 = (mapQ30/totalMAPQ30)*100) %>% select(-totalMAPQ30) %>% 
+  filter(genome != "all")
+#convert alnQ30 to character and then as.numeric
+#RA.Q30$alnQ30 <- as.character(RA.Q30$alnQ30)
+#RA.Q30$alnQ30 <- as.numeric(RA.Q30$alnQ30)
+#Convert to as.dataframe
+#RA.Q30 <- as.data.frame(RA.Q30)
+
+#stacked bar plot showing the proportion of Q>30 reads in the sample aligning to each genome
+alnQ30 %>% ggplot(aes(x="", y=mapQ30, fill=genome)) +
+  geom_bar(stat = "identity") + scale_y_continuous(labels = scales::comma) + theme_bw() +
+  theme(axis.ticks = element_blank(), axis.title.x = element_blank()) + labs(fill="Genome") +
+  ylab("% of reads") + ggtitle("Relative abundance of microbes with MAPQ > 30") +
+  facet_wrap(~sampleID) 
+```
+
+
+##Fragmentation Data
+
+Sequenced reads obtained from ancient samples typically have a much shorter length than those obtained from modern. This is a result of depurination producing abasic sites that are susceptible to hydrolysis and the introduction of single-stranded breaks. Overtime, a build-up of abasic sites and single-stranded breaks produces fragmented DNA. The rate of this decay does not correlate directly with age but can be affected by a multitude of environmental factors. However, it is typically assumed that aDNA samples will demonstrate a lower average fragment length than modern sequences.
+
+MapDamage2 extracts information on read length from the aligned .bam file and collates this into a text file consisting of fragment lengths and their frequency. This data can then be plotted, enabling comparison of fragment length between samples as well as enabling identification of differences in fragmentation pattern for different genomes present in each sample.
+
+```{r message=FALSE}
+#load packages
+library(dplyr)
+library(readr)
+library(magrittr)
+library(tibble)
+library(stringr)
+library(reshape2)
+library(ggplot2)
+
+# create list of all .txt files in folder 
+lgDistFiles <- list.files("alnData", pattern = "lgdistribution.txt", 
+                          full.names = TRUE, recursive = TRUE)
+
+#read-in data from each text file and bind into a data frame
+lengthData <- lgDistFiles %>% lapply(function(x){
+  read_delim(x, delim = "\t", skip = 4, col_names = FALSE) %>%
+    set_colnames(c("std", "length", "freq")) %>%
+    mutate(fileName = x)
+}) %>%
+  bind_rows
+
+#edit FileNames to include only the sampleID and genome
+editLengthFileNames <- function(x){
+  x$fileName <- gsub('alnData/results_2NoAdapt_', '', x$fileName)
+  x$fileName <- gsub('_split/lgdistribution.txt', '', x$fileName)
+  x$fileName <- gsub('L7_lTACTG_rCTCGA', '', x$fileName)
+  x$fileName <- gsub('_lAAGAG_rNONE', '', x$fileName)
+  x$fileName <- gsub('alnData/results_', '', x$fileName)
+  x$fileName <- gsub('ELSIDRON1', 'Elsidron1', x$fileName)
+  x$fileName <- gsub('L7', '', x$fileName)
+  x$fileName <- gsub('highQualAlnData/results_2NoAdapt_', '', x$fileName)
+  x$fileName <- gsub('_Q30', '', x$fileName)
+}
+
+lengthData$fileName <- editLengthFileNames(lengthData)
+
+#Reshape data to separate sampleID and genome into separate vectors
+lengthData <- splitFileName(lengthData)
+#lengthData <- lengthData %>% 
+#  mutate(Genome = str_extract(FileName, "(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)"), 
+#         sampleID = str_replace(FileName, "_(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)", #""))
+
+#sort columns so that genomes listed in alphabetical order
+lengthData <- lengthData[with(lengthData, order(sampleID, genome)), ]
+
+###### Compare overall lengthData for each sample ##################
+#create object with summarised lengths for Elsidron1
+lengthData.Elsidron <- lengthData %>% select(-fileName, -genome, -std) %>% filter(sampleID == "Elsidron1") %>% 
+  select(-sampleID) %>% group_by(length) %>% summarise_each(funs(sum)) %>% mutate(sampleID = "Elsidron1")
+#Create object with summarised lengths for Modern sample
+lengthData.Modern <- lengthData %>% select(-fileName, -genome, -std) %>% filter(sampleID == "Modern") %>% 
+  select(-sampleID) %>% group_by(length) %>% summarise_each(funs(sum)) %>% mutate(sampleID = "Modern")
+#Bind objects into single data frame for plotting
+lengthDist <- lengthData.Modern %>% bind_rows(lengthData.Elsidron)
+#Plot lengthDist
+lengthDist %>% ggplot(aes(x=length, y=freq, colour=sampleID)) + geom_line() + theme_bw() + 
+  xlab("Read length") + ylab("Number of reads") + labs(colour="Sample") +
+  ggtitle("Distribution of fragment lengths for each sample") 
+
+```
+
+Average fragment length appears to be very similar for both samples (~50bp). Elsidron1, ancient sample, has a higher proportion of short read lengths (between 30-60bp) and fewer long reads (>110bp). Both samples show a dip in the number of reads at ~65bp and the Modern sample has an absence of reads of length 95-100bp. **Why??**
+
+```{r message = FALSE}
+########### Compare fragment lengths for each sample with box-plot #############
+
+#use lapply to read each text file, convert to a vector of lengths and bind together
+lengthDataLong <- lgDistFiles %>% lapply(function(x){
+  read_delim(x, delim = "\t", skip = 4, col_names = FALSE) %>%
+    select(-1) %>% group_by(X2) %>% summarise_each(funs(sum)) -> length.vector
+  rep(length.vector$X2, length.vector$X3)
+})
+#Add names to each object in the list
+names(lengthDataLong) <- lgDistFiles
+#Bind list into a dataframe with FileName listed
+lengthDataLong <- names(lengthDataLong) %>% 
+  lapply(function(x){data_frame(fileName = x, lengths = lengthDataLong[[x]])}) %>% bind_rows()
+#edit FileNames to include only the sampleID and genome
+lengthDataLong$fileName <- editLengthFileNames(lengthDataLong)
+#Reshape data to separate sampleID and genome into separate vectors
+lengthDataLong <- splitFileName(lengthDataLong)
+#sort columns so that genomes listed in alphabetical order
+lengthDataLong <- lengthDataLong[with(lengthDataLong, order(sampleID, genome)), ]
+
+#Generate a function to apply to stat_summary so that can plot max and min values
+quantiles <- function(x) {
+  r <- quantile(x, probs = c(0.00, 0.25, 0.5, 0.75, 1))
+  names(r) <- c("ymin", "lower", "middle", "upper", "ymax")
+  r
+}
+
+#Box plot comparing overall fragment length data for each sample
+lengthDataLong %>% ggplot(aes(x=sampleID, y=lengths, fill=sampleID)) + 
+  stat_summary(fun.data = quantiles, geom="boxplot") + 
+  theme_bw() + theme(axis.title.x = element_blank()) + 
+  ylab("Average Fragment Length") + guides(fill=FALSE) +
+  ggtitle("Average fragment lengths per sample")
+```
+
+From the box-plot we see that the mean fragment length for the ancient sample is slightly smaller (51bp) than the Modern (54bp). The Modern sample shows wider distribution of lengths. However, the difference is not significant, suggesting fragment length is not a clear indicator of the ancient nature of DNA.
+
+```{r message = FALSE}
+
+########### Plot fragment lengths according to genome reads align with #####################
+
+#Edit geonome names in lengthData to increase readability
+lengthData$genome <- editGenomeNames(lengthData)
+
+# create graphing function to produce histogram and length distribution plots
+lgDist.graph <- function(df, na.rm = TRUE, ...){
+  
+  # create list of sampleID's in data to loop over 
+  sampleID_list <- unique(df$sampleID)
+  
+  # create for loop to produce ggplot2 graphs 
+  for (i in seq_along(sampleID_list)) {
+
+    # create histogram plot for each sample in df 
+    plot1 <-
+      ggplot(subset(df, df$sampleID==sampleID_list[i]),
+        aes(length, freq, fill = std)) + 
+      geom_bar(stat = "identity") +
+      facet_wrap(( ~ genome), ncol=5) +
+      theme_bw() +
+      theme(legend.position="none") + 
+      scale_y_continuous("Frequency") +
+      scale_x_continuous("Fragment length") +
+      ggtitle(paste(sampleID_list[i], ' - Fragment Lengths by Genome'))
+    
+    plot2 <-
+      ggplot(subset(df, df$sampleID==sampleID_list[i]),
+             aes(length, freq, colour = genome)) +
+      geom_line() +
+      xlab("Fragment length") +
+      ggtitle(paste(sampleID_list[i], ' - Fragment Length Distribution')) +
+      theme_bw() 
+    
+    print(plot1)
+    print(plot2)
+    
+  }
+} 
+
+# run graphing function on long df
+lgDist.graph(lengthData)
+
+```
+
+The data has not been normalized for sample size and thus peaks are higher for more abundant species within the sample. Regardless of genome, we see the same pattern in length data as observed for the overall sample, indicating that none of the 10 species considered demonstrate significant differences in DNA fragmentation.
+
+```{r message = FALSE}
+
+# create list of all .txt files in highQualAln directory 
+lgDistFilesQ30 <- list.files("highQualAlnData", pattern = "lgdistribution.txt", 
+                          full.names = TRUE, recursive = TRUE)
+# Read-in data from each file and bind into a single data frame
+lengthDataQ30 <- lgDistFilesQ30 %>% lapply(function(x){
+  read_delim(x, delim = "\t", skip = 4, col_names = FALSE) %>%
+    set_colnames(c("std", "length", "freq")) %>%
+    mutate(fileName = x)
+}) %>%
+  bind_rows
+
+#edit FileNames to include only the sampleID and genome
+  #lengthDataQ30$FileName <- gsub('highQualAlnData/results_2NoAdapt_', '', lengthDataQ30$FileName)
+  #lengthDataQ30$FileName <- gsub('_Q30_split/lgdistribution.txt', '', lengthDataQ30$FileName)
+lengthDataQ30$fileName <- editLengthFileNames(lengthDataQ30)
+
+#Reshape data to separate sampleID and genome into separate vectors
+  #lengthDataQ30 <- lengthDataQ30 %>% 
+  #  mutate(Genome = str_extract(FileName, 
+  #      "(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)"), 
+  #       sampleID = str_replace(FileName, 
+  #      "_(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)", ""))
+lengthDataQ30 <- splitFileName(lengthDataQ30)
+#Edit genome names to increase readability
+lengthDataQ30$genome <- editGenomeNames(lengthDataQ30)
+
+# Create function for distribution plot
+lgDistPlot <- function(x){x %>%
+  ggplot(aes(x=length, y=freq, colour=genome)) +
+  geom_line() + xlab("Fragment length") +
+  ylab("Occurences") +
+  theme_classic()
+}
+#plot distribution for lengthDataQ30 beside sample plot for lengthData
+lg.Dist.Els.Q0 <- lengthData %>% filter(sampleID == "Elsidron1") %>% lgDistPlot() + guides(colour=FALSE) + ggtitle("No MAPQ filter")
+lg.Dist.Els.Q30 <- lengthDataQ30 %>% filter(sampleID == "Elsidron1") %>% lgDistPlot() + 
+  theme(legend.justification=c(1,1), legend.position=c(1,1)) + ggtitle("MAPQ > 30") 
+grid.arrange(lg.Dist.Els.Q0, lg.Dist.Els.Q30, ncol=2)
+
+#sample plot as above but for modern samples
+lgDistModQ0 <- lengthData %>% filter(sampleID == "Modern") %>% lgDistPlot() + guides(colour=FALSE) + ggtitle("No MAPQ filter")
+lgDistModQ30 <- lengthDataQ30 %>% filter(sampleID == "Modern") %>% lgDistPlot() + ggtitle("MAPQ > 30") +
+  theme(legend.justification = c(1,1), legend.position = c(1,1))
+grid.arrange(lgDistModQ0, lgDistModQ30, ncol=2)
+
+```
+
+Creating the sample plots using only aligned reads with a quality score >30 produces the same length distributions but with a smaller sample size (number of reads). As such, it is preferable to use the higher quality alignment data.
+
+##Normalized length Data for high quality alignment
+
+The data can be normalized for sample size by converting the frequency of each fragment length aligning to a particular genome to a proportion by dividing each frequency by the total number of reads aligning to that genome. (No. of occurences / total read count).
+
+```{r message = FALSE}
+################## Normalize counts based on sample size ##########################
+
+#Read in highQual_split_aligned_read_count.txt and assign to object splitCount
+highQualSplitCount <- read_delim(file = "highQualAlnData/highQual_split_aligned_read_count.txt", delim = "\t",
+                                 skip = 1, col_names = FALSE) %>% set_colnames(c("fileName", "totReadCount"))
+
+#Edit FileName to include only sampleID and genome
+highQualSplitCount$fileName <- gsub('2NoAdapt_', '', highQualSplitCount$fileName)
+
+#Edit FileName to ensure sampleID is consistent
+highQualSplitCount$fileName <- gsub('ELSIDRON1', 'Elsidron1', highQualSplitCount$fileName)
+
+#Join splitCount data with lengthData to create normLengthData
+normLengthDataQ30 <- lengthDataQ30 %>% left_join(highQualSplitCount, by = "fileName")
+
+#normalize occurences of each read length by converting to proportion of sample
+normLengthDataQ30 <- normLengthDataQ30 %>% mutate(freq = freq/totReadCount)
+
+#create normalised distribution plot of Elsidron1 and Modern sample
+normLengthDataQ30 %>% filter(sampleID == "Elsidron1") %>% lgDistPlot() + ggtitle("Elsidron1") + ylab("proportion of reads")
+```
+In the Elsidron1 sample it appears that _S. mutans_ shows a much higher proportion of reads with lengths 43 - 46bp. However, this skewing of the data is a result of the low number of reads which aligned to _S. mutans_ (only 563). A similar peak is observed at length 24bp for _M. neoaurum_. Again this can be attributed to the smaller sample size (1011 reads), compared to other genomes which have sample sizes between 3,628 and 125,212 reads. 
+
+This effect is even more pronounced in the Modern sample. In this plot, largest proportion of reads (>0.1) have lengths 24-25bp for _M. Oralis_ (185 reads) and _E. saphenum_ (162 reads). These two peaks obscure results for _S. mutans_ and _M. neoaurum_ which, as with the Elsidron1 sample, have low sample size and an increased proportion of short reads. 
+
+```{r message = FALSE}
+normLengthDataQ30 %>% filter(sampleID == "Modern") %>% lgDistPlot() + ggtitle("Modern") + ylab("proportion of reads")
+```
+
+If genomes with low sample size (< 1,500) are ignored, this effect is largley removed.
+
+```{r}
+normDistPlotEls <- normLengthDataQ30 %>% filter(sampleID == "Elsidron1") %>% filter(totReadCount > 1500) %>% lgDistPlot() + ylab("proportion of reads") + ggtitle("Elsidron1") + theme(legend.justification = c(1,1), legend.position = c(1,1))
+normDistPlotMod <- normLengthDataQ30 %>% filter(sampleID == "Modern") %>% filter(totReadCount > 1500) %>% lgDistPlot() + ylab("") + ylim(0, 0.025) + theme(legend.justification = c(1,1), legend.position = c(1,1)) + ggtitle("Modern")
+grid.arrange(normDistPlotEls, normDistPlotMod, ncol=2)
+```
+
+These distributions suggest that regardless of genome, reads within the sample demonstrate similar fragmentation patterns. The average fragment length of reads in Elsidron1 is 50bp and the size distribution is fairly narrow compared to reads in the Modern sample. This is more easily observed as a boxplot.
+
+```{r message = FALSE}
+################ Compare average fragment length of genomes #######################
+
+#use lapply to read each text file, convert to a vector of lengths and bind together
+lengthDataQ30Long <- lgDistFilesQ30 %>% lapply(function(x){
+  read_delim(x, delim = "\t", skip = 4, col_names = FALSE) %>%
+    select(-1) %>% group_by(X2) %>% summarise_each(funs(sum)) -> length.vector
+  rep(length.vector$X2, length.vector$X3)
+})
+#Add names to each object in the list
+names(lengthDataQ30Long) <- lgDistFilesQ30
+#Bind list into a dataframe with FileName listed
+lengthDataQ30Long <- names(lengthDataQ30Long) %>% 
+  lapply(function(x){data_frame(fileName = x, lengths = lengthDataQ30Long[[x]])}) %>% bind_rows()
+#Edit fileNames
+lengthDataQ30Long$fileName <- editLengthFileNames(lengthDataQ30Long)
+#Split fileNames
+lengthDataQ30Long <- splitFileName(lengthDataQ30Long)
+#Edit genomes
+lengthDataQ30Long$genome <- editGenomeNames(lengthDataQ30Long)
+
+#Add information about bacterial cell wall
+cellWall <- data_frame(genome = c("A.oris", "C.gracilis", "E.saphenum", "F.nucleatum", 
+                                   "M.neoaurum","M.oralis", "P.gingivalis", "S.mutans", 
+                                   "T.denticola", "T.forsythia"), 
+                       cellWall = c("Gram +", "Gram -", "Gram +", "Gram -", "Mycobacterium",
+                                     "Archeal", "Gram -", "Gram +", "Gram -", "Gram -"))
+
+#join this information to overall dataframe with left_join
+lengthDataQ30Long <- lengthDataQ30Long %>% left_join(cellWall, by = "genome")
+
+### Box-plots ###
+
+# Generate box-plot for Elsidron1 sample
+lengthDataQ30Long %>% filter(sampleID == "Elsidron1") %>% 
+  ggplot(aes(x=genome, y=lengths, fill=cellWall)) + 
+  stat_summary(fun.data = quantiles, geom="boxplot") +
+  theme_bw() + ylab("Average fragment length") + xlab("") +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5)) +
+ # geom_text(aes(label = totReadCount), position = position_stack(vjust = 0.5)) +
+  annotate("text", x = c(1:10), y=5, size=3,
+           label = c("125,212", "37,037", "8,356", "3,628", "1,011", "87,822", "7,115", "563", "11,355", "29,099")) +
+  ggtitle("Elsidron1")
+ 
+```
+
+In this plot the sample size (number of reads) for each genome is shown in the plot. For Elsidron1, each genome demonstrates similar average length of ~50bp. The exceptions are _M. neoaurum_ (mean length 40.28bp) and _S. mutans_ (mean length 46.45bp). Mycobacterium has been reported to be resistent to DNA degradation due to the structure of the cell wall. Thus it is unclear why the DNA reads would be shorter in length. Both of these genomes have the smallest sample size, which may be skewing the results.
+
+The Archeal genome, _Methanobrevibacter oralis_, demonstrates a slightly higher average read length (61.08bp). The differ from other microbes as they do not have a peptidoglycan cell wall. **What does cell wall consist of?**  **Is this a significant difference in lenght??** **Is this trend repeated in other samples??**
+
+```{r message = FALSE}
+# Generate box-plot for Modern sample
+lengthDataQ30Long %>% filter(sampleID == "Modern") %>% ggplot(aes(x=genome, y=lengths, fill=cellWall)) + 
+  stat_summary(fun.data = quantiles, geom="boxplot") +
+  theme_bw() + ylab("Average fragment length") + xlab("") +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5)) +
+  annotate("text", x = c(1:10), y=5, size=3,
+           label = c("17,540", "20,906", "162", "272,789", "1,003", "185", "10,431", "1,285", "6,760", "87,336")) +
+  ggtitle("Modern")
+```
+
+Modern DNA is not expected to demonstrate DNA degradation. Instead, samples are fragmented prior to sequencing. Consequently it is expected that all average fragment length will be similar regardless of species being represented, and in general larger than observed in the ancient sample. This is true for some of the species show, where the mean fragment length is 64.84bp and an IQR of ~29bp. Four species, _E. saphenum_, _M. neoaurum_, _M. oralis_ and _S. mutans_ demonstrate smaller fragment lengths. These also represent the species with fewest number of reads, which again is likely affecting the results.
+
+
+#Misincorporation Data
+
+A common form of DNA damage is base deamination. The rate of deamination varies between nucleotides, but is highest for cytosine and 5-methyl-cytosine, converting these bases to uracil and thymine respectively. When sequenced, this introduces a cytosine to thymine nucleotide substitution into the sequence reads at the 5p end and a guanine to adenine substitution at the 3p end. The presence of these substitutions can be indicative of DNA damage and thus an indicator that the DNA sequenced is ancient in nature.
+
+The program mapDamage2 identifies nucleotide substitutions present in the sequenced read compared to the reference genome and tabulates each of these in terms of their position in relation to the 5' and 3' end of the read. As there may be a bias in the proportion of C and G within the sequence, the count data for each potential substitution can be divided by the number of unmutated bases.
+
+```{r message = FALSE}
+#load packages
+library(dplyr)
+library(readr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(reshape2)
+library(stringr)
+library(gridExtra)
+
+#Create a vector with desired column names
+subDataColNames <- (c("Chr", "End", "Std", "Pos", "A", "C", "G", "T", "Total", 
+                      "GtoA", "CtoT", "AtoG", "TtoC", "AtoC", "AtoT", "CtoG", 
+                      "CtoA", "TtoG", "TtoA", "GtoC", "GtoT"))
+
+# create list of all .txt files in folder 
+ntSubFiles <- list.files("highQualAlnData", pattern = "misincorporation.txt",
+                         full.names = TRUE, recursive = TRUE)
+
+# read-in files and bind into a data frame that include the FileName
+ntSubData <- ntSubFiles %>% lapply(function(x){
+  read_delim(x, delim = "\t", skip = 4, col_names = FALSE) %>% select(1:21) %>%
+    set_colnames(subDataColNames) %>% filter(Total > 0) %>% filter(Pos < 26) %>%
+    mutate(FileName = x) %>% select(-Chr)
+}) %>%
+  bind_rows
+
+#Edit FileName to include only the sampleID and Genome
+ntSubData$FileName <- gsub('highQualAlnData/results_2NoAdapt_', '', ntSubData$FileName)
+ntSubData$FileName <- gsub('_Q30_split/misincorporation.txt', '', ntSubData$FileName)
+ntSubData$FileName <- gsub('ELSIDRON1', 'Elsidron1', ntSubData$FileName)
+
+#Split FileName into separate columns - sampleID and Genome
+ntSubData <- ntSubData %>% 
+  mutate(Genome = str_extract(FileName, "(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)"), 
+         sampleID = str_replace(FileName, "_(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)", ""))
+#Remove FileName column as no longer needed
+ntSubData <- ntSubData %>% select(-FileName)
+#Edit Genome names
+ntSubData$Genome <- gsub('aoris', 'A.oris', ntSubData$Genome)
+ntSubData$Genome <- gsub('cgracilis', 'C.gracilis', ntSubData$Genome)
+ntSubData$Genome <- gsub('esaphenum', 'E.saphenum', ntSubData$Genome)
+ntSubData$Genome <- gsub('fnucleatum', 'F.nucleatum', ntSubData$Genome)
+ntSubData$Genome <- gsub('mneoaurum', 'M.neoaurum', ntSubData$Genome)
+ntSubData$Genome <- gsub('pgingivalis', 'P.gingivalis', ntSubData$Genome)
+ntSubData$Genome <- gsub('smutans', 'S.mutans', ntSubData$Genome)
+ntSubData$Genome <- gsub('tdenticola', 'T.denticola', ntSubData$Genome)
+ntSubData$Genome <- gsub('tforsythia', 'T.forsythia', ntSubData$Genome)
+ntSubData$Genome <- gsub('moralis', 'M.oralis', ntSubData$Genome)
+
+#Split data into separate samples and assign to own dataframes
+Mod_ntSubData <- ntSubData %>% filter(sampleID == "Modern")
+El1_ntSubData <- ntSubData %>% filter(sampleID == "Elsidron1")
+```
+
+If DNA is ancient in nature it is expected to demonstrate a higher frequency of C->T substituions at the 5p' end of the data and an increased proportion of G->A mutations at the 3' end of a sequenced read. This pattern is thus expected to be observed in all bacterial sequences obtained from the Elsidron1 sample, and be absent from bacterial sequences obtained from the Modern sample.
+
+As there are multiple genomes to which each sample aligns, and the rate of nucleotide substitutions may vary between genomes, each must be plotted separately. This is done by creating a graphing function and then looping data for each genome through this function. The code to complete this is shown below.
+
+```{r eval=FALSE}
+# create graphing function
+ntSub.graph <- function(df, na.rm = TRUE, ...){
+  
+  # Specify sampleID
+  sampleID <- unique(df$sampleID)
+  
+  # create list of genomeID's in data to loop over 
+  genomeID_list <- unique(df$Genome)
+  
+  # create for loop to split data based on sampleID 
+  for (i in seq_along(genomeID_list)) {
+      
+      # create object to store 5p data
+      SubFreq_5p <- subset(df, df$Genome==genomeID_list[i]) %>% filter(End == "5p") %>% 
+        select(-End, -Std, -Genome, -sampleID) %>% 
+        group_by(Pos) %>% summarise_each(funs(sum)) %>% 
+        mutate(GtoA = GtoA/G, CtoT = CtoT/C, AtoG = AtoG/A, TtoC = TtoC/T, 
+               AtoC = AtoC/A, AtoT = AtoT/A, CtoG = CtoG/C, CtoA = CtoA/C, 
+               TtoG = TtoG/T, TtoA = TtoA/T, GtoC = GtoC/G, GtoT = GtoT/G) %>% 
+        select(-A, -C, -G, -T, -Total) %>% 
+        melt(id.vars = c("Pos"), variable.name = "substitution", value.name = "Frequency")
+      
+      #create object to store 3p data
+      SubFreq_3p <- subset(df, df$Genome==genomeID_list[i]) %>% filter(End == "3p") %>% 
+        select(-End, -Std, -Genome, -sampleID) %>% 
+        group_by(Pos) %>% summarise_each(funs(sum)) %>% 
+        mutate(GtoA = GtoA/G, CtoT = CtoT/C, AtoG = AtoG/A, TtoC = TtoC/T, 
+               AtoC = AtoC/A, AtoT = AtoT/A, CtoG = CtoG/C, CtoA = CtoA/C, 
+               TtoG = TtoG/T, TtoA = TtoA/T, GtoC = GtoC/G, GtoT = GtoT/G) %>% 
+        select(-A, -C, -G, -T, -Total) %>% 
+        melt(id.vars = c("Pos"), variable.name = "substitution", value.name = "Frequency")
+      
+      #plot to object, 5p data
+      plot5pData <- SubFreq_5p %>% ggplot(aes(x=Pos, y=Frequency, colour=substitution)) + geom_line() + 
+        theme_bw() + scale_y_continuous(limits = c(0, 0.4), position = "left") + 
+        ylab("Substitution Frequency") + xlab("Position from the 5' end") + theme(legend.position = "none")
+      
+      #plot to object, 3p data 
+      plot3pData <- SubFreq_3p %>% ggplot(aes(x=Pos, y=Frequency, colour=substitution)) + geom_line() + theme_bw() +
+        theme(axis.title.y=element_blank()) + scale_x_reverse() + 
+        scale_y_continuous(limits = c(0, 0.4), position = "right") +
+        ylab("Substitution Frequency") + xlab("Position from the 3' end")
+      
+      #print plots
+      grid.arrange(plot5pData, plot3pData, ncol=2, widths=c(0.85,1), 
+                   top = (paste(genomeID_list[i], ' - nucleotide substitution data (', paste(sampleID, ')'))))
+    
+    #End loop
+  }
+}
+
+# run graphing function on df
+ntSub.graph(El1_ntSubData)
+ntSub.graph(Mod_ntSubData) 
+```
+
+As expected, all Elsidron1 reads demonstrate and increased proportion of C->T mutations at the 5' end, gnerally over the first 5-8 bases. A similar increase in the proportion of G->A mutations is observed in the final 8 bases at the 3' end of the read. However, the frequency varies between species. _F. nucleatum_, _E. saphenum_, _C. gracilis_ and _T. denticola_ have the highest frequency of C->T mutations (~3.7), but the rate of G->A mutations is nearly half this (~2.1). _S. mutans_ and _T. forsythia_ demonstrate and average substition frequency of 0.25.  
+
+```{r message = FALSE}
+
+```
+
+As expected, there is an absence of substitions in the Modern sample data, as the DNA has not been damaged and the sequences extracted do not demonstrate the same evolutionary distance to the reference genome as would be observed with ancient bacterial species. More noise is observed in the samples with a lower sample size ( _E. saphenum_, _M. neoaurum_, _M. oralis_ and _S. mutans_), possibly due to sequencing errors. 
+
+In order to compare misincorporation frequency between species of interest, to identify any patterns consistent with cell wall, the rate of mutation of nucleotides at the first and final position of the read can be plotted on a single graph. 
+
+```{r message=FALSE}
+################### Compare frequency of CtoT and GtoA mutations #############################
+
+#Generate a list of 5pCtoT_freq.txt files
+CtoT.Files <- list.files("highQualAlnData", pattern = "5pCtoT_freq.txt", full.names = TRUE, recursive = TRUE)
+#Read in each of these files and bind together in a data frame
+CtoTfreqData <- CtoT.Files %>% lapply(function(x){read_delim(x, delim = "\t", skip = 1, col_names = FALSE) %>% 
+    set_colnames(c("Pos", "Freq")) %>% mutate(FileName = x)}) %>% bind_rows
+#Edit FileName to include only sampleID and Genome
+CtoTfreqData$FileName <- gsub('highQualAlnData/results_2NoAdapt_', '', CtoTfreqData$FileName)
+CtoTfreqData$FileName <- gsub('_Q30_split/5pCtoT_freq.txt', '', CtoTfreqData$FileName)
+#Split sampleID and Genome into separate vectors
+CtoTfreqData <- CtoTfreqData %>% mutate(Genome = str_extract(FileName, 
+                    "(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|moralis|pgingivalis|smutans|tdenticola|tforsythia)"), 
+                sampleID = str_replace(FileName, 
+                    "_(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|moralis|pgingivalis|smutans|tdenticola|tforsythia)", "")) %>% 
+  select(-FileName)
+#Add information on cell.wall and bind to data frame
+cell.wall <- data_frame(Genome = c("aoris", "cgracilis", "esaphenum", "fnucleatum", 
+                                   "mneoaurum","moralis", "pgingivalis", "smutans", 
+                                   "tdenticola", "tforsythia"), 
+                        cell.wall = c("gram+", "gram-", "gram+", "gram-", "Mycobacterium",
+                                      "Archeal", "gram-", "gram+", "gram-", "gram-"))
+CtoTfreqData <- CtoTfreqData %>% left_join(cell.wall, by = "Genome")
+
+#Generate a dot plot representing the CtoT frequency at position 1
+CtoTfreqData %>% filter(Pos == "1") %>% ggplot(aes(x=Genome, y=Freq, shape=sampleID, colour=cell.wall)) + 
+  geom_point(size=4) + scale_shape_manual(values=c(15,13), labels=c("Elsidron1", "Modern")) + 
+  theme_bw() + ylab("Misincorporation Frequency") + 
+  ggtitle("Cytosine to Thymine misincorporation frequency at Position 1 of the 5' end") + 
+  scale_x_discrete(labels=c("A.oris", "C.gracilis", "E.saphenum", "F.nucleatum", "M.neoaurum", "M.oralis", 
+                            "P.gingivalis", "S.mutans", "T.denticola", "T.forsythia")) + 
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=1)) + labs(shape="Sample ID", colour="Cell Wall") + 
+  scale_colour_discrete(labels=c("Archeal", "Gram Positive", "Gram Negative", "Mycobacterium"))
+
+#Plot average of last 5 positions
+xlabs <- c("A.oris", "C.gracilis", "E.saphenum", "F.nucleatum", "M.neoaurum", "M.oralis", 
+           "P.gingivalis", "S.mutans", "T.denticola", "T.forsythia")
+#Write a function for generating boxplot
+singleNtFreqBoxPlot <- function(x){x %>% ggplot(aes(x=Genome, y=Freq, fill=cell.wall)) +
+    geom_boxplot() + facet_wrap(~sampleID, ncol=1) + theme_bw() + ylab("Misincorporation Frequency") +
+    scale_x_discrete(labels=(xlabs)) + theme(axis.text.x = element_text(angle=90, hjust=1, vjust=1)) +
+    scale_fill_discrete(labels=c("Archeal", "Gram Positive", "Gram Negative", "Mycobacterium")) + labs(fill="Cell Wall")}
+
+CtoTfreqData %>% filter(Pos < 4) %>% ggplot(aes(x=Genome, y=Freq, fill=cell.wall)) + 
+  geom_boxplot() + facet_wrap(~sampleID, ncol=1) + theme_bw() + 
+  ylab("Misincorporation Frequency") + ggtitle("C->T misincorporation frequency, averaged over the 3 bases at the 5' end") +
+  scale_x_discrete(labels=c(xlabs)) + theme(axis.text.x = element_text(angle = 90, hjust=1, vjust=1)) +
+  scale_fill_discrete(labels=c("Archeal", "Gram Positive", "Gram Negative", "Mycobacterium")) + labs(fill="Cell Wall")
+
+###Generate sample plots but with G->A mutation at 3p end
+
+#Generate a list of 5pCtoT_freq.txt files
+GtoA.files <- list.files("highQualAlnData", pattern = "3pGtoA_freq.txt", full.names = TRUE, recursive = TRUE)
+#Read in data from each text file and bind into a single data frame
+##Most values in Modern_moralis_Q30 were 0 which affected ability to read-in data (values not 0 were converted to NA)
+##Solved by specifying col_types as number
+GtoAfreqData <- GtoA.files %>% lapply(function(x){
+  read_delim(x, delim = "\t", skip = 1, col_names = FALSE, col_types = cols("i", "n")) %>% 
+    set_colnames(c("Pos", "Freq")) %>% mutate(FileName = x)
+  }) %>% bind_rows
+#Edit FileName to include only sampleID and Genome
+GtoAfreqData$FileName <- gsub('highQualAlnData/results_2NoAdapt_', '', GtoAfreqData$FileName)
+GtoAfreqData$FileName <- gsub('_Q30_split/3pGtoA_freq.txt', '', GtoAfreqData$FileName)
+
+#Write function to split FileName into separate columns - sampleID and Genome
+splitFileName <- function(x){mutate(x, Genome = str_extract(FileName, 
+          "(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)"), 
+          sampleID = str_replace(FileName, "_(aoris|cgracilis|esaphenum|fnucleatum|mneoaurum|pgingivalis|smutans|tdenticola|tforsythia|moralis)", ""))}
+#Apply to GtoAfreqData
+GtoAfreqData <- splitFileName(GtoAfreqData)
+#Add cell wall information with left_join
+GtoAfreqData <- GtoAfreqData %>% left_join(cell.wall, by = "Genome")
+
+#Plot misincorporation frequency at Position 1
+GtoAfreqData %>% filter(Pos == "1") %>% ggplot(aes(x=Genome, y=Freq, shape=sampleID, colour=cell.wall)) + 
+  geom_point(size=4) + theme_bw() + scale_shape_manual(values=c(15,13), labels=c("Elsidron1", "Modern")) + 
+  ylab("Misincorporation Frequency") + ggtitle("G->A misincorporation frequency at position 1 of the 3' end") + 
+  scale_x_discrete(labels=(xlabs)) + theme(axis.text.x = element_text(angle=90, hjust = 1, vjust = 1)) + 
+  labs(shape="Sample ID", colour="Cell Wall") + 
+  scale_color_discrete(labels=c("Archeal", "Gram Positive", "Gram Negative", "Mycobacterium"))
+
+#Plot average misincorporation frequency of the last 3 positions
+GtoAfreqData %>% filter(Pos < 4) %>% singleNtFreqBoxPlot() + ggtitle("G->A misincorporation frequency, averaged of 3 bases at 3' end")
+
+```
+
+### Cytosine to thymine misincorporation
+Mycobacterium demonstrates the lowest rate of C->T mutations, suggesting its DNA is more resistant to decay than other microbial genomes. This correlates with previously reported studies. Gram negative bacteria appear to demonstrate reduced mutation compared to gram positive, but mutation rate varies between species. Need to apply a statistical test to determine if any of the differences observed are significant. 
+
+### Guanine to adenine misincorporation
+Similar trend to what was observed with C->T mutations. **Are any of these differences significant?** (Kruskal-Wallis)
+
+```{r message = FALSE}
+
+###################Compare overall C->T and G->A frequency for each sample#################
+
+###Summarise Frequency of G->A mutations over last 10 bases at 3' end
+#Summarise data for Elsidron1 and assign to object
+#GtoA.Elsidron <- GtoAfreqData %>% filter(Pos < 11) %>% select(-Genome, -cell.wall) %>% 
+ # filter(sampleID == "ELSIDRON1") %>% select(-sampleID) %>% group_by(Pos) %>% summarise_each(funs(sum)) %>% 
+  #mutate(sampleID = "Elsidron1")
+#Summarise data for Modern and assign to object
+#GtoA.Modern <- GtoAfreqData %>% filter(Pos < 11) %>% select(-Genome, -cell.wall) %>% 
+ # filter(sampleID == "Modern") %>% select(-sampleID) %>% group_by(Pos) %>% summarise_each(funs(sum)) %>%
+#  mutate(sampleID = "Modern")
+#Bind both objects into a single data frame
+#overallGtoA <- GtoA.Elsidron %>% bind_rows(GtoA.Modern)
+
+###Summarise Frequency of C->T mutations over first 10 bases at 5' end
+#Summarise data for Elsidron1
+#CtoT.Elsidron <- CtoTfreqData %>% filter(Pos < 11) %>% select(-FileName, -Genome, -cell.wall) %>% 
+#  filter(sampleID == "ELSIDRON1") %>% select(-sampleID) %>% group_by(Pos) %>% summarise_each(funs(sum)) %>% 
+ # mutate(sampleID = "Elsidron1")
+#Summarise data for Modern
+#CtoT.Modern <- CtoTfreqData %>% filter(Pos < 11) %>% select(-FileName, -Genome, -cell.wall) %>% 
+ # filter(sampleID == "Modern") %>% select(-sampleID) %>% group_by(Pos) %>% summarise_each(funs(sum)) %>% 
+  #mutate(sampleID = "Modern")
+#Bind into a single data frame
+#overallCtoT <- CtoT.Elsidron %>% bind_rows(CtoT.Modern)
+
+#Plot overall data for both mutations and arrange side-by-side
+
+#CtoTPlot <- overallCtoT %>% ggplot(aes(x=Pos, y=Freq, colour=sampleID)) + geom_point() + theme_classic() + 
+ # stat_smooth(se = FALSE) + xlab("Position") + ylab("Misincorporation Frequency") + 
+  #ggtitle("C->T misincorporation at 5' end") + ylim(0, 4) + guides(colour=FALSE)
+
+#GtoAPlot <- overallGtoA %>% ggplot(aes(x=Pos, y=Freq, colour=sampleID)) + geom_point() + theme_classic() + 
+ # stat_smooth(se = FALSE) + scale_x_reverse() + scale_y_continuous(limits = c(0, 4), position = "right") + 
+  #ggtitle("G->A misincorporation at 3' end") + xlab("Position") + ylab("Misincorporation Frequency") + 
+  #theme(legend.position = c(0.2,0.8)) + labs(colour="Sample ID")
+
+#library(gridExtra)
+#grid.arrange(CtoTPlot, GtoAPlot, ncol=2)
+```
+
+
